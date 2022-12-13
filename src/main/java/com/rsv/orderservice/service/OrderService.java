@@ -1,5 +1,6 @@
 package com.rsv.orderservice.service;
 
+import com.rsv.orderservice.dto.InventoryResponseDto;
 import com.rsv.orderservice.dto.OrderLineItemsDto;
 import com.rsv.orderservice.dto.OrderRequestDto;
 import com.rsv.orderservice.dto.OrderResponseDto;
@@ -9,20 +10,47 @@ import com.rsv.orderservice.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClient;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
 @Service
+@Transactional
 @RequiredArgsConstructor
 public class OrderService {
 
     @Autowired
+    private WebClient webClient;
+    @Autowired
     private final OrderRepository orderRepository;
 
     public void placeOrder(OrderRequestDto orderRequest) {
-        Order order = mapToOrder(orderRequest);
-        orderRepository.save(order);
+        List<String> skuCodes = orderRequest.getOrderLineItemsDtoList()
+                        .stream()
+                        .map(OrderLineItemsDto::getSkuCode)
+                        .toList();
+
+        InventoryResponseDto[] inventoryResponseDtos = webClient.get()
+                .uri("http://localhost:8082/api/inventory",
+                        uriBuilder -> uriBuilder.queryParam("skuCodes", skuCodes)
+                                .build()
+                )
+                .retrieve()
+                .bodyToMono(InventoryResponseDto[].class)
+                .block();
+
+        boolean isInStock = Arrays.stream(inventoryResponseDtos).allMatch(InventoryResponseDto::isInStock);
+
+        if(isInStock) {
+            Order order = mapToOrder(orderRequest);
+            orderRepository.save(order);
+        } else {
+            throw new IllegalArgumentException("One or more products are not in stock");
+        }
+
     }
 
     public List<OrderResponseDto> getAllOrders() {
